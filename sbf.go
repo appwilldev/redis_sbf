@@ -220,13 +220,13 @@ func (s *SBFFrame) frameDataRange(header *SBFHeader, id uint16) {
 	s.SliceCount = uint16(math.Ceil(float64(header.SliceCount) + float64(id-1)*math.Log2(1.0/float64(SBF_DEFAULT_S_ERROR_RATIO))))
 	s.SliceSize = uint32(float64(header.SliceSize) * math.Pow(SBF_DEFAULT_S_MIN_CAPACITY_SIZE, float64(id-1)))
 	if s.SliceSize%8 != 0 {
-		s.SliceSize = uint32(math.Floor(float64(s.SliceSize)/8.0)) << 8
+		s.SliceSize = (s.SliceSize >> 3) << 3
 	}
 	for i := 1; i <= int(id); i++ {
 		count := uint16(math.Ceil(float64(header.SliceCount) + float64(i-1)*math.Log2(1.0/float64(SBF_DEFAULT_S_ERROR_RATIO))))
 		size := uint32(float64(header.SliceSize) * math.Pow(SBF_DEFAULT_S_MIN_CAPACITY_SIZE, float64(i-1)))
 		if size%8 != 0 {
-			size = uint32(math.Floor(float64(size)/8.0)) << 3
+			size = (size >> 3) << 3
 		}
 		s.StartIndex += (size*uint32(count) + (SBF_FRAME_HEADER_SIZE+SBF_FRAME_PADDING)<<3) * uint32(i-1)
 		s.EndIndex += (s.StartIndex + (size*uint32(count) + SBF_FRAME_HEADER_SIZE<<3))
@@ -244,17 +244,12 @@ func (s *SBFFrame) Add(conn redis.Conn, element []byte) bool {
 	// update bit val
 	conn.Send("MULTI")
 	for index, h := range hashes {
-		pos := uint32(index)*s.SliceSize + s.StartIndex + h + SBF_FRAME_HEADER_SIZE*8
+		pos := uint32(index)*s.SliceSize + s.StartIndex + h + SBF_FRAME_HEADER_SIZE<<3
 		conn.Send("SETBIT", s.Refer, pos, 1)
 	}
 	conn.Send("INCR", s.Key)
-	_, err := conn.Do("EXEC")
-	if err == nil {
-		s.Count += 1
-		return true
-	} else {
-		return false
-	}
+	conn.Do("EXEC")
+	return true
 }
 
 func (s *SBFFrame) Check(conn redis.Conn, element []byte) bool {
@@ -263,7 +258,7 @@ func (s *SBFFrame) Check(conn redis.Conn, element []byte) bool {
 	// check bit val
 	conn.Send("MULTI")
 	for index, h := range hashes {
-		pos := uint32(index)*s.SliceSize + s.StartIndex + h + SBF_FRAME_HEADER_SIZE*8
+		pos := uint32(index)*s.SliceSize + s.StartIndex + h + SBF_FRAME_HEADER_SIZE<<3
 		conn.Send("GETBIT", s.Refer, pos)
 	}
 	if data, err := redis.Ints(conn.Do("EXEC")); err == nil {
@@ -373,7 +368,6 @@ func (s *SBF) Add(element []byte) bool {
 			}
 			return frame.Add(s.Conn, element)
 		} else {
-			fmt.Println(err)
 			return false
 		}
 	}
