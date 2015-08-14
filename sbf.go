@@ -198,6 +198,7 @@ func NewFrame(conn redis.Conn, header *SBFHeader, id uint16) (*SBFFrame, error) 
 }
 
 func LoadFrame(conn redis.Conn, header *SBFHeader, id uint16) (*SBFFrame, error) {
+	// key := SBF_NAME + ":count:" + header.Refer + ":1"
 	key := fmt.Sprintf("%s:count:%s:%d", SBF_NAME, header.Refer, id)
 	frame := new(SBFFrame)
 	frame.Key = key
@@ -216,23 +217,14 @@ func LoadFrame(conn redis.Conn, header *SBFHeader, id uint16) (*SBFFrame, error)
 // according to errorRate, capacity, can get the size one bloom filter.
 func (s *SBFFrame) frameDataRange(header *SBFHeader, id uint16) {
 	s.FullRate = float32(header.FullRate) / 10000
-
-	s.SliceCount = uint16(math.Ceil(float64(header.SliceCount) + float64(id-1)*math.Log2(1.0/float64(SBF_DEFAULT_S_ERROR_RATIO))))
-	s.SliceSize = uint32(float64(header.SliceSize) * math.Pow(SBF_DEFAULT_S_MIN_CAPACITY_SIZE, float64(id-1)))
-	if s.SliceSize%8 != 0 {
-		s.SliceSize = (s.SliceSize >> 3) << 3
-	}
 	for i := 1; i <= int(id); i++ {
-		count := uint16(math.Ceil(float64(header.SliceCount) + float64(i-1)*math.Log2(1.0/float64(SBF_DEFAULT_S_ERROR_RATIO))))
-		size := uint32(float64(header.SliceSize) * math.Pow(SBF_DEFAULT_S_MIN_CAPACITY_SIZE, float64(i-1)))
-		if size%8 != 0 {
-			size = (size >> 3) << 3
-		}
-		s.StartIndex += (size*uint32(count) + (SBF_FRAME_HEADER_SIZE+SBF_FRAME_PADDING)<<3) * uint32(i-1)
-		s.EndIndex += (s.StartIndex + (size*uint32(count) + SBF_FRAME_HEADER_SIZE<<3))
+		s.SliceCount = uint16(math.Ceil(float64(header.SliceCount) + float64(i-1)*math.Log2(1.0/float64(SBF_DEFAULT_S_ERROR_RATIO))))
+		s.SliceSize = (uint32(float64(header.SliceSize)*math.Pow(SBF_DEFAULT_S_MIN_CAPACITY_SIZE, float64(i-1))) >> 3) << 3
+
+		s.EndIndex += (s.SliceSize*uint32(s.SliceCount) + (SBF_FRAME_HEADER_SIZE+SBF_FRAME_PADDING)<<3)
 	}
-	s.StartIndex += SBF_HEADER_SIZE << 3
 	s.EndIndex += SBF_HEADER_SIZE << 3
+	s.StartIndex = s.EndIndex - uint32(s.SliceCount)*s.SliceSize - (SBF_FRAME_HEADER_SIZE+SBF_FRAME_PADDING)<<3
 }
 
 func (s *SBFFrame) IsFrameFull() bool {
@@ -248,8 +240,13 @@ func (s *SBFFrame) Add(conn redis.Conn, element []byte) bool {
 		conn.Send("SETBIT", s.Refer, pos, 1)
 	}
 	conn.Send("INCR", s.Key)
-	conn.Do("EXEC")
-	return true
+	_, err := conn.Do("EXEC")
+	if err == nil {
+		s.Count += 1
+		return true
+	} else {
+		return false
+	}
 }
 
 func (s *SBFFrame) Check(conn redis.Conn, element []byte) bool {
@@ -343,35 +340,36 @@ func TruncateSBF(conn redis.Conn, refer string) error {
 //  * if frame is fullfilled, create a new frame.
 //  * add to this frame.
 func (s *SBF) Add(element []byte) bool {
-	if !s.Check(element) {
-		if frame, err := LoadFrame(s.Conn, s.Header, s.Header.Count); err == nil {
-			// check if frame is full
-			if frame.IsFrameFull() {
-				if s.Header.Count < SBF_FRAME_COUNT_LIMIT {
-					// update header
-					if err := s.Header.incrCount(s.Conn); err == nil {
-						if frame, err = NewFrame(s.Conn, s.Header, s.Header.Count); err != nil {
-							return false
-						}
-					} else {
+	// if !s.Check(element) {
+	if frame, err := LoadFrame(s.Conn, s.Header, s.Header.Count); err == nil {
+		// check if frame is full
+		if frame.IsFrameFull() {
+			if s.Header.Count < SBF_FRAME_COUNT_LIMIT {
+				// update header
+				if err := s.Header.incrCount(s.Conn); err == nil {
+					if frame, err = NewFrame(s.Conn, s.Header, s.Header.Count); err != nil {
 						return false
 					}
 				} else {
-					// frames have reached the limication, use old frames.
-					// this may increase the error rate.
-					id := uint16(rand.Uint32() % uint32(s.Header.Count))
-					frame, err = LoadFrame(s.Conn, s.Header, id)
-					if err != nil {
-						return false
-					}
+					return false
+				}
+			} else {
+				// frames have reached the limication, use old frames.
+				// this may increase the error rate.
+				id := uint16(rand.Uint32() % uint32(s.Header.Count))
+				frame, err = LoadFrame(s.Conn, s.Header, id)
+				if err != nil {
+					return false
 				}
 			}
-			return frame.Add(s.Conn, element)
-		} else {
-			return false
 		}
+		return frame.Add(s.Conn, element)
+	} else {
+		fmt.Println(err)
+		return false
 	}
-	return true
+	//}
+	// return true
 }
 
 // Check if an element belongs to this sbf
