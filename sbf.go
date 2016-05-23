@@ -311,26 +311,6 @@ func LoadSBF(conn redis.Conn, refer string) (*SBF, error) {
 	return sbf, nil
 }
 
-func TruncateSBF(conn redis.Conn, refer string) error {
-	if sbf, err := LoadSBF(conn, refer); err == nil {
-		for i := 0; i < int(sbf.Header.Count); i++ {
-			key := fmt.Sprintf("%s:count:%s:%d", SBF_NAME, refer, i)
-			// ignore errors
-			conn.Do("DEL", key)
-		}
-		if _, err := conn.Do("DEL", refer); err == nil {
-			sbf.Header.Count = 1
-			sbf.Header.updateHeader(conn)
-			_, err = NewFrame(conn, sbf.Header, 1)
-			return err
-		} else {
-			return err
-		}
-	} else {
-		return err
-	}
-}
-
 // Add element to sbf
 // Steps:
 //  * check if sbf exists.
@@ -388,4 +368,40 @@ func (s *SBF) Check(element []byte) bool {
 		}
 	}
 	return false
+}
+
+func (s *SBF) Truncate() error {
+	for i := 0; i < int(s.Header.Count); i++ {
+		key := fmt.Sprintf("%s:count:%s:%d", SBF_NAME, s.Header.Refer, i)
+		// ignore errors
+		_, err := s.Conn.Do("DEL", key)
+		if err != nil && err != redis.ErrNil {
+			return err
+		}
+	}
+	if _, err := s.Conn.Do("DEL", s.Header.Refer); err == nil {
+		s.Header.Count = 1
+		s.Header.updateHeader(s.Conn)
+		_, err = NewFrame(s.Conn, s.Header, 1)
+		return err
+	} else {
+		return err
+	}
+}
+
+func (s *SBF) Expire(ttl int64) error {
+	for i := 0; i < int(s.Header.Count); i++ {
+		key := fmt.Sprintf("%s:count:%s:%d", SBF_NAME, s.Header.Refer, i)
+		// ignore errors
+		_, err := s.Conn.Do("EXPIRE", key, ttl)
+		if err != nil && err != redis.ErrNil {
+			return err
+		}
+	}
+	_, err := s.Conn.Do("EXPIRE", s.Header, ttl)
+	if err != nil && err != redis.ErrNil {
+		return err
+	} else {
+		return nil
+	}
 }
