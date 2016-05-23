@@ -9,11 +9,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/appwilldev/redis_sbf/internal/murmur"
+	. "github.com/appwilldev/redis_sbf/internal/utils"
 	"github.com/garyburd/redigo/redis"
 	"math"
 	"math/rand"
-	"sbf/internal/murmur"
-	. "sbf/internal/utils"
 	"time"
 )
 
