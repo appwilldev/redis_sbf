@@ -303,7 +303,7 @@ func LoadSBF(conn redis.Conn, refer string) (*SBF, error) {
 	sbf := new(SBF)
 	if sbf.Header, err = LoadHeader(conn, refer); err != nil {
 		// close
-		conn.Close()
+		// conn.Close()
 		return nil, err
 	}
 	sbf.Conn = conn
